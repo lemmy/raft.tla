@@ -526,6 +526,22 @@ TypeOK ==
 \* The prefix of the log of server i that has been committed
 Committed(i) == SubSeq(log[i],1,commitIndex[i])
 
+\* Every (index, term) pair determines a log prefix
+LogMatching ==
+    \A i, j \in Server :
+        \A n \in 1..Len(log[i]) :
+            log[i][n].term = log[j][n].term =>
+            SubSeq(log[i],1,n) = SubSeq(log[j],1,n)
+
+\* Every log entry that is committed in at least one server
+\* is present in the log of at least one server in every quorum.
+QuorumCommitted ==
+    \A i \in Nat, e \in [term : Nat, value : Value] :
+        (\E s \in Server : i <= commitIndex[s] /\ log[s][i] = e) =>
+        \A q \in Quorum : \E s \in q : log[s][i] = e
+
+\* The committed entries in every log are a prefix of the
+\* leader's committed
 LeaderCompleteness ==
     \A i \in Server : state[i] = Leader =>
                       \A j \in Server : IsPrefix(Committed(j),Committed(i))
@@ -605,7 +621,7 @@ LEMMA MinProperties ==
 LEMMA TypeInvariance == Spec => []TypeOK
 <1>1. Init => TypeOK
    <2> SUFFICES ASSUME Init
-                PROVE  IndInv
+                PROVE  TypeOK
       OBVIOUS
    <2> USE DEF Init
    <2>1. IsABag(messages) /\ BagToSet(messages) \subseteq MessageType
