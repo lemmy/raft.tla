@@ -30,18 +30,6 @@ CONSTANTS RequestVoteRequest, RequestVoteResponse,
 \* to another.
 VARIABLE messages
 
-\* A history variable used in the proof. This would not be present in an
-\* implementation.
-\* Keeps track of successful elections, including the initial logs of the
-\* leader and voters' logs. Set of functions containing various things about
-\* successful elections (see BecomeLeader).
-VARIABLE elections
-
-\* A history variable used in the proof. This would not be present in an
-\* implementation.
-\* Keeps track of every log ever in the system (set of logs).
-VARIABLE allLogs
-
 ----
 \* The following variables are all per server (functions with domain Server).
 
@@ -69,12 +57,7 @@ VARIABLE votesResponded
 \* The set of servers from which the candidate has received a vote in its
 \* currentTerm.
 VARIABLE votesGranted
-\* A history variable used in the proof. This would not be present in an
-\* implementation.
-\* Function from each server that voted for this candidate in its currentTerm
-\* to that voter's log.
-VARIABLE voterLog
-candidateVars == <<votesResponded, votesGranted, voterLog>>
+candidateVars == <<votesResponded, votesGranted>>
 
 \* The following variables are used only on leaders:
 \* The next entry to send to each follower.
@@ -82,13 +65,13 @@ VARIABLE nextIndex
 \* The latest entry that each follower has acknowledged is the same as the
 \* leader's. This is used to calculate commitIndex on the leader.
 VARIABLE matchIndex
-leaderVars == <<nextIndex, matchIndex, elections>>
+leaderVars == <<nextIndex, matchIndex>>
 
 \* End of per server variables.
 ----
 
 \* All variables; used for stuttering (asserting state hasn't changed).
-vars == <<messages, allLogs, serverVars, candidateVars, leaderVars, logVars>>
+vars == <<messages, serverVars, candidateVars, leaderVars, logVars>>
 
 ----
 \* Helpers
@@ -127,9 +110,6 @@ Max(s) == CHOOSE x \in s : \A y \in s : x >= y
 ----
 \* Define initial values for all variables
 
-InitHistoryVars == /\ elections = {}
-                   /\ allLogs   = {}
-                   /\ voterLog  = [i \in Server |-> [j \in {} |-> <<>>]]
 InitServerVars == /\ currentTerm = [i \in Server |-> 1]
                   /\ state       = [i \in Server |-> Follower]
                   /\ votedFor    = [i \in Server |-> Nil]
@@ -143,7 +123,6 @@ InitLeaderVars == /\ nextIndex  = [i \in Server |-> [j \in Server |-> 1]]
 InitLogVars == /\ log          = [i \in Server |-> << >>]
                /\ commitIndex  = [i \in Server |-> 0]
 Init == /\ messages = EmptyBag
-        /\ InitHistoryVars
         /\ InitServerVars
         /\ InitCandidateVars
         /\ InitLeaderVars
@@ -158,11 +137,10 @@ Restart(i) ==
     /\ state'          = [state EXCEPT ![i] = Follower]
     /\ votesResponded' = [votesResponded EXCEPT ![i] = {}]
     /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]
-    /\ voterLog'       = [voterLog EXCEPT ![i] = [j \in {} |-> <<>>]]
     /\ nextIndex'      = [nextIndex EXCEPT ![i] = [j \in Server |-> 1]]
     /\ matchIndex'     = [matchIndex EXCEPT ![i] = [j \in Server |-> 0]]
     /\ commitIndex'    = [commitIndex EXCEPT ![i] = 0]
-    /\ UNCHANGED <<messages, currentTerm, votedFor, log, elections>>
+    /\ UNCHANGED <<messages, currentTerm, votedFor, log>>
 
 \* Server i times out and starts a new election.
 Timeout(i) == /\ state[i] \in {Follower, Candidate}
@@ -173,7 +151,6 @@ Timeout(i) == /\ state[i] \in {Follower, Candidate}
               /\ votedFor' = [votedFor EXCEPT ![i] = Nil]
               /\ votesResponded' = [votesResponded EXCEPT ![i] = {}]
               /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]
-              /\ voterLog'       = [voterLog EXCEPT ![i] = [j \in {} |-> <<>>]]
               /\ UNCHANGED <<messages, leaderVars, logVars>>
 
 \* Candidate i sends j a RequestVote request.
@@ -209,9 +186,6 @@ AppendEntries(i, j) ==
                 mprevLogIndex  |-> prevLogIndex,
                 mprevLogTerm   |-> prevLogTerm,
                 mentries       |-> entries,
-                \* mlog is used as a history variable for the proof.
-                \* It would not exist in a real implementation.
-                mlog           |-> log[i],
                 mcommitIndex   |-> Min({commitIndex[i], lastEntry}),
                 msource        |-> i,
                 mdest          |-> j])
@@ -226,12 +200,6 @@ BecomeLeader(i) ==
                          [j \in Server |-> Len(log[i]) + 1]]
     /\ matchIndex' = [matchIndex EXCEPT ![i] =
                          [j \in Server |-> 0]]
-    /\ elections'  = elections \cup
-                         {[eterm     |-> currentTerm[i],
-                           eleader   |-> i,
-                           elog      |-> log[i],
-                           evotes    |-> votesGranted[i],
-                           evoterLog |-> voterLog[i]]}
     /\ UNCHANGED <<messages, currentTerm, votedFor, candidateVars, logVars>>
 
 \* Leader i receives a client request to add v to the log.
@@ -305,10 +273,8 @@ HandleRequestVoteResponse(i, j, m) ==
     /\ \/ /\ m.mvoteGranted
           /\ votesGranted' = [votesGranted EXCEPT ![i] =
                                   votesGranted[i] \cup {j}]
-          /\ voterLog' = [voterLog EXCEPT ![i] =
-                              voterLog[i] @@ (j :> m.mlog)]
        \/ /\ ~m.mvoteGranted
-          /\ UNCHANGED <<votesGranted, voterLog>>
+          /\ UNCHANGED <<votesGranted>>
     /\ Discard(m)
     /\ UNCHANGED <<serverVars, votedFor, leaderVars, logVars>>
 
@@ -334,7 +300,8 @@ ReturnToFollowerState(i, m) ==
 
 AppendEntriesAlreadyDone(i, j, index, m) ==
     /\ \/ m.mentries = << >>
-       \/ /\ Len(log[i]) >= index
+       \/ /\ m.mentries /= << >>
+          /\ Len(log[i]) >= index
           /\ log[i][index].term = m.mentries[1].term
                           \* This could make our commitIndex decrease (for
                           \* example if we process an old, duplicated request),
@@ -350,6 +317,7 @@ AppendEntriesAlreadyDone(i, j, index, m) ==
     /\ UNCHANGED <<serverVars, logVars>>
 
 ConflictAppendEntriesRequest(i, index, m) ==
+    /\ m.mentries /= << >>
     /\ Len(log[i]) >= index
     /\ log[i][index].term /= m.mentries[1].term
     /\ LET new == [index2 \in 1..(Len(log[i]) - 1) |-> log[i][index2]]
@@ -399,7 +367,7 @@ HandleAppendEntriesResponse(i, j, m) ==
                                Max({nextIndex[i][j] - 1, 1})]
           /\ UNCHANGED <<matchIndex>>
     /\ Discard(m)
-    /\ UNCHANGED <<serverVars, candidateVars, logVars, elections>>
+    /\ UNCHANGED <<serverVars, candidateVars, logVars>>
 
 \* Any RPC with a newer term causes the recipient to advance its term first.
 UpdateTerm(i, j, m) ==
@@ -450,25 +418,26 @@ DropMessage(m) ==
 
 ----
 \* Defines how the variables may transition.
-Next == /\ \/ \E i \in Server : Restart(i)
-           \/ \E i \in Server : Timeout(i)
-           \/ \E i,j \in Server : RequestVote(i, j)
-           \/ \E i \in Server : BecomeLeader(i)
-           \/ \E i \in Server, v \in Value : ClientRequest(i, v)
-           \/ \E i \in Server : AdvanceCommitIndex(i)
-           \/ \E i,j \in Server : AppendEntries(i, j)
-           \/ \E m \in DOMAIN messages : Receive(m)
-           \/ \E m \in DOMAIN messages : DuplicateMessage(m)
-           \/ \E m \in DOMAIN messages : DropMessage(m)
-           \* History variable that tracks every log ever:
-        /\ allLogs' = allLogs \cup {log[i] : i \in Server}
+Next == \/ \E i \in Server : Restart(i)
+        \/ \E i \in Server : Timeout(i)
+        \/ \E i,j \in Server : RequestVote(i, j)
+        \/ \E i \in Server : BecomeLeader(i)
+        \/ \E i \in Server, v \in Value : ClientRequest(i, v)
+        \/ \E i \in Server : AdvanceCommitIndex(i)
+        \/ \E i,j \in Server : AppendEntries(i, j)
+        \/ \E m \in DOMAIN messages : Receive(m)
+        \/ \E m \in DOMAIN messages : DuplicateMessage(m)
+        \/ \E m \in DOMAIN messages : DropMessage(m)
 
 \* The specification must start with the initial state and transition according
 \* to Next.
 Spec == Init /\ [][Next]_vars
 
-\* The main safety proofs are below
-\* We start with type invariants
+(***************************************************************************)
+(* The main safety proofs are below                                        *)
+(***************************************************************************)
+----
+\* Type invariants
 
 \* The next four definitions give the types of each type of message
 RequestVoteRequestType ==
@@ -485,7 +454,6 @@ AppendEntriesRequestType ==
        mprevLogIndex : Int,
        mprevLogTerm : Nat,
        mentries : Seq([term : Nat, value : Value]),
-       mlog : Seq([term : Nat, value : Value]),
        mcommitIndex : Nat,
        msource : Server,
        mdest : Server]
@@ -522,31 +490,6 @@ TypeOK ==
     /\ votesGranted \in [Server -> SUBSET Server]
     /\ nextIndex \in [Server -> [Server -> { n \in Nat : 1 <= n } ]]
     /\ matchIndex \in [Server -> [Server -> Nat]]
-
-\* The prefix of the log of server i that has been committed
-Committed(i) == SubSeq(log[i],1,commitIndex[i])
-
-\* Every (index, term) pair determines a log prefix
-LogMatching ==
-    \A i, j \in Server :
-        \A n \in 1..Len(log[i]) :
-            log[i][n].term = log[j][n].term =>
-            SubSeq(log[i],1,n) = SubSeq(log[j],1,n)
-
-\* Every log entry that is committed in at least one server
-\* is present in the log of at least one server in every quorum.
-QuorumCommitted ==
-    \A i \in Nat, e \in [term : Nat, value : Value] :
-        (\E s \in Server : i <= commitIndex[s] /\ log[s][i] = e) =>
-        \A q \in Quorum : \E s \in q : log[s][i] = e
-
-\* The committed entries in every log are a prefix of the
-\* leader's committed
-LeaderCompleteness ==
-    \A i \in Server : state[i] = Leader =>
-                      \A j \in Server : IsPrefix(Committed(j),Committed(i))
-
-IndInv == TypeOK /\ LeaderCompleteness
 
 ASSUME DistinctRoles == /\ Leader /= Candidate
                         /\ Candidate /= Follower
@@ -618,6 +561,7 @@ LEMMA MinProperties ==
     PROVE /\ Min(S) \in Nat
           /\ \A s \in S : Min(S) <= s
 
+\* Type correctness
 LEMMA TypeInvariance == Spec => []TypeOK
 <1>1. Init => TypeOK
    <2> SUFFICES ASSUME Init
@@ -725,7 +669,6 @@ LEMMA TypeInvariance == Spec => []TypeOK
                                  ELSE 0,
                 mentries |-> SubSeq(log[i], nextIndex[i][j],
                                     Min({Len(log[i]), nextIndex[i][j]})),
-                mlog |-> log[i],
                 mcommitIndex |-> Min({commitIndex[i],
                                       Min({Len(log[i]), nextIndex[i][j]})}),
                 msource |-> i, mdest |-> j]
@@ -945,585 +888,166 @@ LEMMA TypeInvariance == Spec => []TypeOK
 <1>3. QED
    BY <1>1, <1>2, PTL DEF Spec
 
-LEMMA Invariance == Spec => []IndInv
-<1>1. Init => IndInv
+----
+\* Correctness invariants
+
+----
+\* I believe that the election safety property in the Raft
+\* paper is stronger than it needs to be and requires history
+\* variables. The definition ElectionSafety is an invariant that
+\* is strong enough without requiring history variables. First,
+\* we state two properties which will allow us to conclude election
+\* safety
+
+\* All leaders have a quorum of servers who either voted
+\* for the leader or have a higher term
+LeaderVotesQuorum ==
+    \A i \in Server :
+        state[i] = Leader =>
+        {j \in Server : currentTerm[j] > currentTerm[i] \/ votedFor[j] = i} \in Quorum
+
+\* If a candidate has a chance of being elected, there
+\* are no log entries with that candidate's term
+CandidateTermNotInLog ==
+    \A i \in Server :
+        (/\ state[i] = Candidate
+         /\ {j \in Server : currentTerm[j] = currentTerm[i] /\ votedFor[j] \in {i, Nil}} \in Quorum) =>
+        \A j \in Server :
+        \A n \in DOMAIN log[j] :
+             log[j][n].term /= currentTerm[i]
+
+LEMMA ElectionsCorrect == Spec => [](CandidateTermNotInLog /\ LeaderVotesQuorum)
+<1>1. Init => CandidateTermNotInLog /\ LeaderVotesQuorum
+  <2> USE DEF Init
   <2> SUFFICES ASSUME Init
-               PROVE  IndInv
+               PROVE  CandidateTermNotInLog /\ LeaderVotesQuorum
     OBVIOUS
-  <2>1. TypeOK
-    <3> USE DEF Init
-    <3>1. IsABag(messages) /\ BagToSet(messages) \subseteq MessageType
-        BY DEF IsABag, EmptyBag, BagToSet, SetToBag
-    <3>2. currentTerm \in [Server -> Nat]
-        BY DEF InitServerVars
-    <3>3. state \in [Server -> {Follower, Candidate, Leader}]
-        BY DEF InitServerVars
-    <3>4. votedFor \in [Server -> Server \cup {Nil}]
-        BY DEF InitServerVars
-    <3>5. log \in [Server -> Seq([term : Nat, value : Value])]
-        BY DEF InitLogVars
-    <3>6. commitIndex \in [Server -> Nat]
-        BY DEF InitLogVars
-    <3>7. votesResponded \in [Server -> SUBSET Server]
-        BY DEF InitCandidateVars
-    <3>8. votesGranted \in [Server -> SUBSET Server]
-        BY DEF InitCandidateVars
-    <3>9. nextIndex \in [Server -> [Server -> { n \in Nat : 1 <= n } ]]
-        BY DEF InitLeaderVars
-    <3>10. matchIndex \in [Server -> [Server -> Nat]]
-        BY DEF InitLeaderVars
-    <3>11. QED
-      BY <3>1, <3>10, <3>2, <3>3, <3>4, <3>5, <3>6, <3>7, <3>8, <3>9 DEF TypeOK
-  <2>2. LeaderCompleteness
-    BY DistinctRoles DEF Init, InitServerVars, LeaderCompleteness
+  <2>1. CandidateTermNotInLog
+    BY DistinctRoles DEF CandidateTermNotInLog, InitServerVars
+  <2>2. LeaderVotesQuorum
+    BY DistinctRoles DEF LeaderVotesQuorum, InitServerVars
   <2>3. QED
-    BY <2>1, <2>2 DEF IndInv
-<1>2. IndInv /\ [Next]_vars => IndInv'
-  <2> USE DEF IndInv
-  <2> SUFFICES ASSUME IndInv /\ [Next]_vars
-               PROVE  IndInv'
+    BY <2>1, <2>2
+<1>2. CandidateTermNotInLog /\ LeaderVotesQuorum /\ [Next]_vars => (CandidateTermNotInLog' /\ LeaderVotesQuorum')
+  <2> USE DistinctRoles
+  <2> USE DEF CandidateTermNotInLog, LeaderVotesQuorum
+  <2> SUFFICES ASSUME CandidateTermNotInLog,
+                      LeaderVotesQuorum,
+                      [Next]_vars
+               PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
     OBVIOUS
-  <2>1. TypeOK'
-    <3> USE DEF TypeOK
-    <3>1. CASE Next
-      <4>1. CASE \E i \in Server : Restart(i)
-        BY <4>1 DEF Restart
-      <4>2. CASE \E i \in Server : Timeout(i)
-        <5> SUFFICES ASSUME NEW i \in Server,
-                            Timeout(i)
-                     PROVE  TypeOK'
-          BY <4>2
-        <5> QED
-           BY <4>2 DEF Timeout, leaderVars, logVars
-      <4>3. CASE \E i,j \in Server : RequestVote(i, j)
-        <5> SUFFICES ASSUME NEW i \in Server, NEW j \in Server,
-                            RequestVote(i, j)
-                     PROVE  TypeOK'
-          BY <4>3
-        <5>1. [mtype         |-> RequestVoteRequest,
-               mterm         |-> currentTerm[i],
-               mlastLogTerm  |-> LastTerm(log[i]),
-               mlastLogIndex |-> Len(log[i]),
-               msource       |-> i,
-               mdest         |-> j] \in MessageType
-          BY LenProperties DEF MessageType, LastTerm, RequestVoteRequestType
-        <5> QED
-          BY <5>1, <4>3, WithMessage_MessageType, WithMessage_IsABag
-          DEF RequestVote, serverVars, candidateVars, leaderVars, logVars,
-              Send
-      <4>4. CASE \E i \in Server : BecomeLeader(i)
-        BY <4>4 DEF BecomeLeader, candidateVars, logVars
-      <4>5. CASE \E i \in Server, v \in Value : ClientRequest(i, v)
-         BY <4>5, AppendProperties
-         DEF ClientRequest, candidateVars, leaderVars, serverVars
-      <4>6. CASE \E i \in Server : AdvanceCommitIndex(i)
-        <5> USE DEF AdvanceCommitIndex  
-        <5> SUFFICES ASSUME NEW i \in Server,
-                            AdvanceCommitIndex(i)
-                     PROVE  TypeOK'
-          BY <4>6 
-        <5>1. (commitIndex \in [Server -> Nat])'
-            <6>1. {index \in 1..Len(log[i]) :
-                              {i}
-                              \cup {k \in Server : matchIndex[i][k] >= index}
-                              \in Quorum} \in SUBSET Nat
-                BY LenProperties
-            <6>2. ASSUME {index \in 1..Len(log[i]) :
-                              {i}
-                              \cup {k \in Server : matchIndex[i][k] >= index}
-                              \in Quorum}
-                           # {}
-                  PROVE   Max({index \in 1..Len(log[i]) :
-                                    {i}
-                                    \cup {k \in Server :
-                                            matchIndex[i][k] >= index}
-                                    \in Quorum}) \in Nat
-                BY <6>1, <6>2, MaxProperties
-            <6>3. QED
-                BY <6>2
-        <5>2. QED
-          BY <5>1 DEF serverVars, logVars, candidateVars, leaderVars
-      <4>7. CASE \E i,j \in Server : AppendEntries(i, j)
-        <5> SUFFICES ASSUME NEW i \in Server, NEW j \in Server,
-                            AppendEntries(i, j)
-                     PROVE  TypeOK'
-          BY <4>7
-        <5> state[i] = Leader
-           BY DEF AppendEntries 
-        <5> DEFINE m ==
-               [mtype |-> AppendEntriesRequest,
-                mterm |-> currentTerm[i],
-                mprevLogIndex |-> nextIndex[i][j] - 1,
-                mprevLogTerm |-> IF nextIndex[i][j] - 1 > 0 /\ nextIndex[i][j] - 1 <= Len(log[i])
-                                 THEN log[i][nextIndex[i][j] - 1].term
-                                 ELSE 0,
-                mentries |-> SubSeq(log[i], nextIndex[i][j],
-                                    Min({Len(log[i]), nextIndex[i][j]})),
-                mlog |-> log[i],
-                mcommitIndex |-> Min({commitIndex[i],
-                                      Min({Len(log[i]), nextIndex[i][j]})}),
-                msource |-> i, mdest |-> j]
-        <5>1. Min({Len(log[i]), nextIndex[i][j]}) \in Nat
-            BY MinProperties, LenProperties
-        <5>2. Min({commitIndex[i], Min({Len(log[i]), nextIndex[i][j]})}) \in Nat
-            <6>1. {commitIndex[i], Min({Len(log[i]), nextIndex[i][j]})} /= {}
-                OBVIOUS
-            <6>2. commitIndex[i] \in Nat
-                OBVIOUS
-            <6> QED
-                BY MinProperties, <5>1, <6>1, <6>2
-        <5>3. m.mentries \in Seq([term : Nat, value : Value])
-            BY SubSeqProperties, MinProperties
-        <5>4. m.mprevLogTerm \in Nat
-            OBVIOUS
-        <5>5. m.mprevLogIndex \in Int
-            OBVIOUS
-        <5>6. m \in MessageType
-            BY <5>2, <5>3, <5>4, <5>5
-            DEF MessageType, AppendEntriesRequestType
-        <5> QED
-          BY <4>7, <5>6, WithMessage_MessageType, WithMessage_IsABag
-          DEF AppendEntries, serverVars, candidateVars, leaderVars, logVars, Send
-      <4>8. CASE \E m \in DOMAIN messages : Receive(m)
-        <5> USE DEF Receive
-        <5> SUFFICES ASSUME NEW m \in DOMAIN messages,
-                            Receive(m)
-                     PROVE  TypeOK'
-          BY <4>8
-        <5> DEFINE i == m.mdest
-        <5> DEFINE j == m.msource
-        <5>0. i \in Server /\ j \in Server
-           BY DEF BagToSet, MessageType, RequestVoteRequestType,
-                  AppendEntriesRequestType, RequestVoteResponseType,
-                  AppendEntriesResponseType
-        <5>1. CASE UpdateTerm(i, j, m)
-           <6>1. m \in MessageType
-              BY DEF BagToSet
-           <6>2. m.mterm \in Nat
-              BY <6>1
-              DEF MessageType, RequestVoteRequestType,
-                  AppendEntriesRequestType, RequestVoteResponseType,
-                  AppendEntriesResponseType
-           <6> QED
-              BY <5>1, <6>2, DistinctRoles
-              DEF UpdateTerm, candidateVars, leaderVars, logVars
-        <5>2. CASE /\ m.mtype = RequestVoteRequest
-                   /\ HandleRequestVoteRequest(i, j, m)
-           <6> DEFINE logOk == \/ m.mlastLogTerm > LastTerm(log[i])
-                               \/ /\ m.mlastLogTerm = LastTerm(log[i])
-                                  /\ m.mlastLogIndex >= Len(log[i])
-           <6> DEFINE grant == /\ m.mterm = currentTerm[i]
-                               /\ logOk
-                               /\ votedFor[i] \in {Nil, j}
-           <6> DEFINE m_1 == [mtype        |-> RequestVoteResponse,
-                            mterm        |-> currentTerm[i],
-                            mvoteGranted |-> grant,
-                            mlog         |-> log[i],
-                            msource      |-> i,
-                            mdest        |-> j]
-                     
-           <6>2. m_1 \in MessageType
-              BY <5>0 DEF MessageType, RequestVoteResponseType
-           <6>3. m \in MessageType
-              BY DEF BagToSet
-           <6>4. /\ IsABag(WithMessage(m_1, messages))
-                 /\ BagToSet(WithMessage(m_1, messages)) \subseteq MessageType
-              BY <6>2, WithMessage_IsABag, WithMessage_MessageType
-           <6>5. /\ IsABag(WithoutMessage(m,WithMessage(m_1, messages)))
-                 /\ BagToSet(WithoutMessage(m,WithMessage(m_1, messages))) \subseteq MessageType
-              BY <6>3, <6>4, WithoutMessage_IsABag, WithoutMessage_MessageType
-           <6>6. IsABag(messages') /\ BagToSet(messages') \subseteq MessageType
-              BY <5>2, <6>5 DEF HandleRequestVoteRequest, Reply
-           <6> QED
-              BY <5>2, <5>0, <6>2, <6>6
-              DEF HandleRequestVoteRequest, leaderVars, candidateVars, logVars
-        <5>3. CASE /\ m.mtype = RequestVoteResponse
-                   /\ \/ DropStaleResponse(m.mdest, m.msource, m)
-                      \/ HandleRequestVoteResponse(m.mdest, m.msource, m)
-           <6>1. m \in MessageType
-              BY DEF BagToSet
-           <6>2. CASE DropStaleResponse(i, j, m)
-              BY <5>3, <6>1, <6>2, WithoutMessage_IsABag,
-                  WithoutMessage_MessageType
-              DEF DropStaleResponse, Discard, serverVars,
-                  candidateVars, leaderVars, logVars
-           <6>3. CASE HandleRequestVoteResponse(i, j, m)
-                BY <5>0, <5>3, <6>1, <6>3, WithoutMessage_IsABag,
-                   WithoutMessage_MessageType
-                DEF HandleRequestVoteResponse, Discard,
-                    serverVars, leaderVars, logVars
-           <6> QED
-              BY <5>3, <6>2, <6>3
-        <5>4. CASE /\ m.mtype = AppendEntriesRequest
-                   /\ HandleAppendEntriesRequest(i, j, m)
-           <6> m \in MessageType
-              BY DEF MessageType, AppendEntriesRequestType, BagToSet
-           <6>0. m \in AppendEntriesRequestType
-                 BY <5>4, DistinctMessageTypes
-                 DEF MessageType, RequestVoteRequestType, AppendEntriesRequestType,
-                     RequestVoteResponseType, AppendEntriesResponseType
-           <6> DEFINE logOk == \/ m.mprevLogIndex = 0
-                               \/ /\ m.mprevLogIndex > 0
-                                  /\ m.mprevLogIndex <= Len(log[i])
-                                  /\ m.mprevLogTerm = log[i][m.mprevLogIndex].term
-           <6>1. CASE RejectAppendEntriesRequest(i, j, m, logOk)
-              <7> DEFINE m_1 ==
-                     [mtype |-> AppendEntriesResponse,
-                      mterm |-> currentTerm[m.mdest], msuccess |-> FALSE,
-                      mmatchIndex |-> 0, msource |-> m.mdest,
-                      mdest |-> m.msource]
-              <7>1. m_1 \in MessageType
-                BY <5>0 DEF MessageType, AppendEntriesResponseType
-              <7> QED
-                 BY <5>4, <6>1, <7>1, Reply_messagesType
-                 DEF HandleAppendEntriesRequest, RejectAppendEntriesRequest,
-                     serverVars, logVars, candidateVars, leaderVars
-           <6>2. CASE ReturnToFollowerState(i, m)
-              BY <5>4, <6>2, DistinctRoles
-              DEF HandleAppendEntriesRequest, ReturnToFollowerState, logVars,
-                  candidateVars, leaderVars
-           <6>3. CASE AcceptAppendEntriesRequest(i, j, logOk, m)
-              <7> DEFINE index == m.mprevLogIndex + 1
-              <7>0. state[i] = Follower
-                BY <6>3 DEF AcceptAppendEntriesRequest
-              <7>2. m.mprevLogIndex \in Nat
-                BY <6>3, <6>0
-                DEF AcceptAppendEntriesRequest, AppendEntriesRequestType
-              <7>3. CASE AppendEntriesAlreadyDone(i, j, index, m)
-                 <8>1. [mtype |-> AppendEntriesResponse,
-                        mterm |-> currentTerm[m.mdest], msuccess |-> TRUE,
-                        mmatchIndex |-> m.mprevLogIndex + Len(m.mentries),
-                        msource |-> m.mdest, mdest |-> m.msource] \in MessageType
-                    BY <5>0, <6>0, <7>2, LenProperties
-                    DEF MessageType, AppendEntriesRequestType, AppendEntriesResponseType
-                 <8> QED
-                    BY <5>4, <7>2, <8>1, <7>3, Reply_messagesType
-                    DEF AppendEntriesAlreadyDone, HandleAppendEntriesRequest,
-                        AppendEntriesRequestType, candidateVars, leaderVars,
-                        serverVars, logVars
-              <7>4. CASE ConflictAppendEntriesRequest(i, index, m)
-                <8>1. [index2 \in 1..Len(log[m.mdest]) - 1 |->
-                               log[m.mdest][index2]]
-                      \in Seq([term : Nat, value : Value])
-                   BY <5>0
-                <8>2. [log EXCEPT
-                           ![m.mdest] = [index2 \in 1..Len(log[m.mdest]) - 1 |->
-                                        log[m.mdest][index2]]]
-                      \in [Server -> Seq([term : Nat, value : Value])]
-                   BY <8>1
-                <8>3. log' \in [Server -> Seq([term : Nat, value : Value])]
-                   BY <8>2, <7>4 DEF ConflictAppendEntriesRequest
-                <8>4. UNCHANGED <<messages, currentTerm, state, votedFor, commitIndex,
-                                  votesResponded, votesGranted, nextIndex, matchIndex>>
-                   BY <5>4, <7>4
-                   DEF HandleAppendEntriesRequest, ConflictAppendEntriesRequest,
-                       serverVars, candidateVars, leaderVars
-                <8> QED
-                    BY <8>3, <8>4, <7>0, <7>4, DistinctRoles
-                    DEF ConflictAppendEntriesRequest
-              <7>5. CASE NoConflictAppendEntriesRequest(i, m)
-                <8>1. UNCHANGED <<messages, currentTerm, state, votedFor, commitIndex,
-                                  votesResponded, votesGranted, nextIndex, matchIndex>>
-                   BY <5>4, <7>5
-                   DEF HandleAppendEntriesRequest, NoConflictAppendEntriesRequest,
-                       serverVars, candidateVars, leaderVars
-                <8>2. Append(log[m.mdest], (m.mentries)[1])
-                      \in Seq([term : Nat, value : Value])
-                   BY <7>5, <5>0, <6>0, AppendProperties
-                   DEF AppendEntriesRequestType, NoConflictAppendEntriesRequest
-                <8> QED
-                   BY <7>0, <7>5, <8>1, <8>2, DistinctRoles
-                   DEF NoConflictAppendEntriesRequest
-              <7> QED
-                BY <5>4, <6>3, <7>3, <7>4, <7>5
-                DEF AcceptAppendEntriesRequest, candidateVars, leaderVars
-           <6> QED
-              BY <5>4, <6>1, <6>2, <6>3 DEF HandleAppendEntriesRequest
-        <5>5. CASE /\ m.mtype = AppendEntriesResponse
-                   /\ \/ DropStaleResponse(i, j, m)
-                      \/ HandleAppendEntriesResponse(i, j, m)
-           <6>1. CASE DropStaleResponse(i, j, m)
-              BY <6>1, WithoutMessage_IsABag, WithoutMessage_MessageType
-              DEF DropStaleResponse, Discard,
-                  serverVars, candidateVars, leaderVars, logVars
-           <6>2. CASE HandleAppendEntriesResponse(i, j, m)
-              <7>1. m \in AppendEntriesResponseType
-                 BY <5>5, DistinctMessageTypes
-                 DEF BagToSet, MessageType, AppendEntriesResponseType,
-                     RequestVoteRequestType, AppendEntriesRequestType,
-                     RequestVoteResponseType
-              <7> QED
-                 BY <6>2, <7>1, WithoutMessage_IsABag, WithoutMessage_MessageType,
-                    MaxProperties
-                 DEF HandleAppendEntriesResponse, Discard, AppendEntriesResponseType,
-                     serverVars, candidateVars, logVars 
-           <6> QED
-              BY <5>5, <6>1, <6>2
-        <5> QED
-            BY <5>1, <5>2, <5>3, <5>4, <5>5
-      <4>9. CASE \E m \in DOMAIN messages : DuplicateMessage(m)
-        BY <4>9, WithMessage_IsABag, WithMessage_MessageType
-        DEF DuplicateMessage, Send, leaderVars, serverVars, candidateVars,
-            logVars, BagToSet
-      <4>10. CASE \E m \in DOMAIN messages : DropMessage(m)
-        BY <4>10, WithoutMessage_IsABag, WithoutMessage_MessageType
-        DEF DropMessage, Discard, leaderVars, serverVars, candidateVars,
-            logVars, BagToSet
-      <4>11. QED
-        BY <3>1, <4>1, <4>10, <4>2, <4>3, <4>4, <4>5, <4>6, <4>7, <4>8, <4>9
-        DEF Next
-    <3>2. CASE UNCHANGED vars
-        BY <3>2 DEF vars, serverVars, candidateVars, leaderVars, logVars
-    <3>3. QED
-      BY <3>1, <3>2
-  <2>2. LeaderCompleteness'
-  <2>3. QED
-    BY <2>1, <2>2 DEF IndInv
-<1>3. QED
-    BY <1>1, <1>2, PTL DEF Spec
-
-\*<6>1. m \in AppendEntriesRequestType
-\*           <6> DEFINE m_1 == [mtype |-> AppendEntriesResponse,
-\*                            mterm |-> currentTerm[m.mdest],
-\*                            msuccess |-> FALSE, mmatchIndex |-> 0,
-\*                            msource |-> m.mdest, mdest |-> m.msource]
-\*           <6>2. CASE Reply(m_1,m)
-\*              <7>1. m_1 \in MessageType
-\*              <7> QED
-\*           <6> DEFINE m_2 == [mtype |-> AppendEntriesResponse,
-\*                              mterm |-> currentTerm[m.mdest],
-\*                              msuccess |-> TRUE,
-\*                              mmatchIndex |-> m.mprevLogIndex
-\*                                              + Len(m.mentries),
-\*                              msource |-> m.mdest, mdest |-> m.msource]
-\*           <6>3a. CASE Reply(m_2,m)
-\*           <6>3b. log' = [log EXCEPT ![i] = [index2 \in 1..(Len(log[i]) - 1) |->
-\*                                          log[i][index2]]]
-\*           <6>3c. log' = [log EXCEPT ![i] = Append(log[i], m.mentries[1])]
-\*           <6>4. state' = [state EXCEPT ![i] = Follower]
-\*           <6> QED
-\*              BY <5>4, <6>2, <6>3a, <6>3b, <6>3c, <6>4
-\*              DEF HandleAppendEntriesRequest, candidateVars, leaderVars
-
-\*        <5>1. ASSUME NEW i_1 \in Server,
-\*                         state[i_1] = Leader
-\*              PROVE nextIndex'[i_1] \in [Server -> 1..(Len(log'[i_1]) + 1)]
-\*           <6>1. CASE i = i_1
-\*              <7>1. Len(log'[i]) = Len(log[i]) + 1
-\*                 BY <6>1, AppendProperties DEF ClientRequest
-\*              <7>2. nextIndex[i] \in [Server -> 1..(Len((log)[i]) + 1)]
-\*                 BY LenProperties DEF ClientRequest, leaderVars
-\*              <7>3. 1..(Len((log)[i]) + 1) \subseteq 1..(Len((log)[i]) + 2)
-\*                 BY LenProperties
-\*              <7>4. nextIndex[i] \in [Server -> 1..(Len((log)[i]) + 2)]
-\*                 BY <7>2, <7>3
-\*              <7> QED
-\*                 BY <5>1, <7>1, <7>4 DEF ClientRequest, leaderVars
-\*           <6>2. CASE i /= i_1
-\*              BY <5>1, <6>2 DEF ClientRequest, leaderVars
-\*           <6> QED
-\*              BY <6>1, <6>2
-
-LEMMA TypeOKCorrect == Spec => TypeOK
-<1>1. Init => TypeOK
-    <2>1. Init => currentTerm \in [Server -> Nat]
-        BY DEF Init, InitServerVars
-    <2>2. Init => IsABag(messages) /\ BagToSet(messages) \subseteq MessageType
-        <3>1. Init => IsABag(messages)
-            BY DEF Init, IsABag, EmptyBag, SetToBag
-        <3>2. QED
-            BY <3>1, Bags_EmptyBag DEF Init, BagToSet
-    <2>3. Init => log \in [Server -> Seq([term : Nat, value : Value])]
-        BY DEF Init, InitLogVars
-    <2>4. QED
-        BY <2>1, <2>2, <2>3 DEF TypeOK
-<1>2. TypeOK /\ Next => TypeOK'
-  <2> USE DEF TypeOK
-  <2> SUFFICES ASSUME TypeOK /\ Next
-               PROVE  TypeOK'
-    OBVIOUS
-  <2>1. (currentTerm \in [Server -> Nat])'
-    <3>1. CASE \E i \in Server : Restart(i)
-        BY <3>1 DEF Restart
-    <3>2. CASE \E i \in Server : Timeout(i)
-        BY <3>2 DEF Timeout
-    <3>3. CASE \E i,j \in Server : RequestVote(i, j)
-        BY <3>3 DEF RequestVote, serverVars
-    <3>4. CASE \E i \in Server : BecomeLeader(i)
-        BY <3>4 DEF BecomeLeader
-    <3>5. CASE \E i \in Server, v \in Value : ClientRequest(i, v)
-        BY <3>5 DEF ClientRequest, serverVars
-    <3>6. CASE \E i \in Server : AdvanceCommitIndex(i)
-        BY <3>6 DEF AdvanceCommitIndex, serverVars
-    <3>7. CASE \E i,j \in Server : AppendEntries(i, j)
-        BY <3>7 DEF AppendEntries, serverVars
-    <3>8. CASE \E m \in DOMAIN messages : Receive(m)
-      <4> SUFFICES ASSUME NEW m \in DOMAIN messages,
-                          Receive(m)
-                   PROVE  (currentTerm \in [Server -> Nat])'
-        BY <3>8
-      <4> DEFINE i == m.mdest
-      <4> DEFINE j == m.msource
-      <4>1. CASE UpdateTerm(i, j, m)
-        BY <4>1 DEF UpdateTerm, BagToSet, MessageType
-      <4>2. CASE HandleRequestVoteRequest(i, j, m)
-        BY <4>2 DEF HandleRequestVoteRequest
-      <4>3. CASE DropStaleResponse(i, j, m)
-        BY <4>3 DEF DropStaleResponse, serverVars
-      <4>4. CASE HandleRequestVoteResponse(i, j, m)
-        BY <4>4 DEF HandleRequestVoteResponse, serverVars
-      <4>5. CASE HandleAppendEntriesRequest(i, j, m)
-        BY <4>5 DEF HandleAppendEntriesRequest, serverVars
-      <4>6. CASE DropStaleResponse(i, j, m)
-        BY <4>6 DEF DropStaleResponse, serverVars
-      <4>7. CASE HandleAppendEntriesResponse(i, j, m)
-        BY <4>7 DEF HandleAppendEntriesResponse, serverVars
-      <4> QED
-        BY <4>1, <4>2, <4>3, <4>4, <4>5, <4>6, <4>7 DEF Receive
-    <3>9. CASE \E m \in DOMAIN messages : DuplicateMessage(m)
-        BY <3>9 DEF DuplicateMessage, serverVars
-    <3>10. CASE \E m \in DOMAIN messages : DropMessage(m)
-        BY <3>10 DEF DropMessage, serverVars
-    <3>11. QED
-      BY <3>1, <3>10, <3>2, <3>3, <3>4, <3>5, <3>6, <3>7, <3>8, <3>9 DEF Next
-  <2>2. (log \in [Server -> Seq([term : Nat, value : Value])])'
-  <2>3. (IsABag(messages) /\ BagToSet(messages) \subseteq MessageType)'
-  <2>4. QED
-    BY <2>1, <2>2, <2>3 DEF TypeOK
-<1>3. QED
-    BY <1>1, <1>2
-
-LEMMA TypeOKCorrect1 ==
-    Spec => TypeOK
-<1>1. Init => TypeOK
-    <2>1. Init => currentTerm \in [Server -> Nat]
-        BY DEF Init, InitServerVars
-    <2>2. Init => IsABag(messages) /\ BagToSet(messages) \subseteq MessageType
-        <3>1. Init => IsABag(messages)
-            BY DEF Init, IsABag, EmptyBag, SetToBag
-        <3>2. QED
-            BY <3>1, Bags_EmptyBag DEF Init, BagToSet
-    <2>3. Init => log \in [Server -> Seq([term : Nat, value : Value])]
-        BY DEF Init, InitLogVars
-    <2>4. QED
-        BY <2>1, <2>2, <2>3 DEF TypeOK
-<1>2. TypeOK /\ Next => TypeOK'
-  <2> SUFFICES ASSUME TypeOK,
-                      allLogs' = allLogs \cup {log[i] : i \in Server},
-                      \/ \E i \in Server : Restart(i)
-                      \/ \E i \in Server : Timeout(i)
-                      \/ \E i,j \in Server : RequestVote(i, j)
-                      \/ \E i \in Server : BecomeLeader(i)
-                      \/ \E i \in Server, v \in Value : ClientRequest(i, v)
-                      \/ \E i \in Server : AdvanceCommitIndex(i)
-                      \/ \E i,j \in Server : AppendEntries(i, j)
-                      \/ \E m \in DOMAIN messages : Receive(m)
-                      \/ \E m \in DOMAIN messages : DuplicateMessage(m)
-                      \/ \E m \in DOMAIN messages : DropMessage(m)
-               PROVE  TypeOK'
-    BY DEF Next
-  <2> USE DEF TypeOK
   <2>1. CASE \E i \in Server : Restart(i)
     BY <2>1 DEF Restart
   <2>2. CASE \E i \in Server : Timeout(i)
-    BY <2>2 DEF Timeout, logVars
   <2>3. CASE \E i,j \in Server : RequestVote(i, j)
-    BY <2>3 DEF MessageType, RequestVote, Send, WithMessage,
-                               LastTerm
   <2>4. CASE \E i \in Server : BecomeLeader(i)
-    BY <2>4 DEF BecomeLeader, logVars
   <2>5. CASE \E i \in Server, v \in Value : ClientRequest(i, v)
-    BY <2>5 DEF ClientRequest, serverVars
   <2>6. CASE \E i \in Server : AdvanceCommitIndex(i)
-    BY <2>6 DEF AdvanceCommitIndex, serverVars
   <2>7. CASE \E i,j \in Server : AppendEntries(i, j)
-    BY <2>7 DEF AppendEntries, Send, WithMessage, serverVars, logVars
   <2>8. CASE \E m \in DOMAIN messages : Receive(m)
-    BY <2>8 DEF Receive, WithMessage, serverVars, logVars
   <2>9. CASE \E m \in DOMAIN messages : DuplicateMessage(m)
-    <3> SUFFICES ASSUME NEW m \in DOMAIN messages,
-                          DuplicateMessage(m)
-                   PROVE  TypeOK'
-        BY <2>9
-    <3>1. IsABag(SetToBag({m}))
-        BY DEF IsABag, SetToBag
-    <3>2. DOMAIN messages' = DOMAIN messages
-      <4>1. DOMAIN (messages (+) SetToBag({m})) =
-            DOMAIN messages \cup DOMAIN SetToBag({m})
-        BY Bags_Union, <3>1
-      <4>2. QED
-        BY <4>1 DEF DuplicateMessage, Send, WithMessage, SetToBag
-    <3>3. IsABag(messages')
-        BY <2>9, <3>1, Bags_Union DEF DuplicateMessage, Send, WithMessage
-    <3>4. QED
-        BY <3>2, <3>3, <2>9 DEF DuplicateMessage, BagToSet, serverVars, logVars
   <2>10. CASE \E m \in DOMAIN messages : DropMessage(m)
-    <3>1. (currentTerm \in [Server -> Nat])'
-        BY <2>10 DEF DropMessage, serverVars
-    <3>2. (IsABag(messages) /\ BagToSet(messages) \subseteq MessageType)'
-      <4> SUFFICES ASSUME NEW m \in DOMAIN messages,
-                          DropMessage(m)
-                   PROVE  (IsABag(messages) /\ BagToSet(messages) \subseteq MessageType)'
-        BY <2>10
-      <4>1. IsABag(SetToBag({m}))
-        BY DEF IsABag, SetToBag
-      <4>2. IsABag(messages')
-        BY <2>1, <4>1, Bags_Difference DEF DropMessage, Discard, WithoutMessage 
-      <4>3. DOMAIN messages' \subseteq DOMAIN messages
-        BY <2>1, <4>1, Bags_Difference DEF DropMessage, Discard, WithoutMessage
-      <4>4. QED
-        BY <4>2, <4>3 DEF BagToSet
-    <3>3. (log \in [Server -> Seq([term : Nat, value : Value])])'
-        BY <2>10 DEF DropMessage, logVars
-    <3>4. QED
-      BY <3>1, <3>2, <3>3 DEF TypeOK
-  <2>11. QED
-    BY <2>1, <2>10, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9
+  <2>11. CASE UNCHANGED vars
+  <2>12. QED
+    BY <2>1, <2>10, <2>11, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9 DEF Next
 <1>3. QED
-    BY <1>1, <1>2
+    BY <1>1, <1>2, PTL DEF Spec
 
-LEMMA TermMonotonic ==
-  TypeOK /\ Next => \A i \in Server : currentTerm[i] =< currentTerm'[i]
-  <1> SUFFICES ASSUME TypeOK,
-                      allLogs' = allLogs \cup {log[i_1] : i_1 \in Server},
-                      NEW i \in Server,
-                      \/ \E i_1 \in Server : Restart(i_1)
-                      \/ \E i_1 \in Server : Timeout(i_1)
-                      \/ \E i_1,j \in Server : RequestVote(i_1, j)
-                      \/ \E i_1 \in Server : BecomeLeader(i_1)
-                      \/ \E i_1 \in Server, v \in Value : ClientRequest(i_1, v)
-                      \/ \E i_1 \in Server : AdvanceCommitIndex(i_1)
-                      \/ \E i_1,j \in Server : AppendEntries(i_1, j)
-                      \/ \E m \in DOMAIN messages : Receive(m)
-                      \/ \E m \in DOMAIN messages : DuplicateMessage(m)
-                      \/ \E m \in DOMAIN messages : DropMessage(m)
-               PROVE  currentTerm[i] =< currentTerm'[i]
-    BY DEF Next
-  <1>1. CASE \E i_1 \in Server : Restart(i_1)
-    BY <1>1 DEF Restart, TypeOK
-  <1>2. CASE \E i_1 \in Server : Timeout(i_1)
-    BY <1>2 DEF Timeout, TypeOK
-  <1>3. CASE \E i_1,j \in Server : RequestVote(i_1, j)
-    BY <1>3 DEF RequestVote, TypeOK, serverVars
-  <1>4. CASE \E i_1 \in Server : BecomeLeader(i_1)
-    BY <1>4 DEF BecomeLeader, TypeOK
-  <1>5. CASE \E i_1 \in Server, v \in Value : ClientRequest(i_1, v)
-    BY <1>5 DEF ClientRequest, TypeOK, serverVars
-  <1>6 CASE \E i_1 \in Server : AdvanceCommitIndex(i_1)
-    BY <1>6 DEF AdvanceCommitIndex, TypeOK, serverVars
-  <1>7. CASE \E i_1,j \in Server : AppendEntries(i_1, j)
-    BY <1>7 DEF AppendEntries, TypeOK, serverVars
-  <1>8. CASE \E m \in DOMAIN messages : Receive(m)
-    BY <1>8 DEF Receive, TypeOK, UpdateTerm, HandleRequestVoteRequest,
-                DropStaleResponse, HandleRequestVoteResponse,
-                HandleAppendEntriesRequest, DropStaleResponse,
-                HandleAppendEntriesResponse, serverVars
-  <1>9. CASE \E m \in DOMAIN messages : DuplicateMessage(m)
-    BY <1>9 DEF DuplicateMessage, TypeOK, serverVars
-  <1>10. CASE \E m \in DOMAIN messages : DropMessage(m)
-    BY <1>10 DEF DropMessage, TypeOK, serverVars
-  <1> QED
-    BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6, <1>7, <1>8, <1>9, <1>10
+\* A leader always has the greatest index for its current term
+ElectionSafety ==
+    \A i \in Server :
+        state[i] = Leader =>
+        \A j \in Server :
+            Max({n \in DOMAIN log[i] : log[i][n].term = currentTerm[i]}) >=
+            Max({n \in DOMAIN log[j] : log[j][n].term = currentTerm[i]})
+----
+
+\* The prefix of the log of server i that has been committed
+Committed(i) == SubSeq(log[i],1,commitIndex[i])
+
+\* Votes are only granted to servers with logs
+\* that are at least as up to date
+VotesGrantedInv ==
+    \A i \in Server :
+    \A j \in votesGranted[i] :
+        currentTerm[i] = currentTerm[j] =>
+        \* The following is a subtlety:
+        \* Only the committed entries of j are
+        \* a prefix of i's log, not the entire 
+        \* log of j
+        IsPrefix(Committed(j),log[i])
+
+\* All committed entries are contained in the log
+\* of at least one server in every quorum
+QuorumLogInv ==
+    \A i \in Server :
+    \A S \in Quorum :
+        \E j \in S :
+            IsPrefix(Committed(i), log[j])
+
+\* The committed entries in every log are a prefix of the
+\* leader's log
+LeaderCompleteness ==
+    \A i \in Server :
+        state[i] = Leader =>
+        \A j \in Server :
+            IsPrefix(Committed(j),log[i])
+
+\* The "up-to-date" check performed by servers
+\* before issuing a vote implies that i receives
+\* a vote from j only if i has all of j's committed
+\* entries
+MoreUpToDateCorrect ==
+    \A i, j \in Server :
+       (\/ LastTerm(log[i]) > LastTerm(log[j])
+        \/ /\ LastTerm(log[i]) = LastTerm(log[j])
+           /\ Len(log[i]) >= Len(log[j])) =>
+       IsPrefix(Committed(j), log[i])
+
+\* Every (index, term) pair determines a log prefix
+LogMatching ==
+    \A i, j \in Server :
+        \A n \in (1..Len(log[i])) \cap (1..Len(log[j])) :
+            log[i][n].term = log[j][n].term =>
+            SubSeq(log[i],1,n) = SubSeq(log[j],1,n)
+
+----
+\* Invariants for messages
+
+\* If server i casts a vote for server j and their terms
+\* are the same, then i's committed log is a prefix of j's log
+RequestVoteResponseInv ==
+    \A m \in (DOMAIN messages) \cap RequestVoteResponseType :
+        (/\ m.mvoteGranted
+         /\ currentTerm[m.msource] = currentTerm[m.mdest]) =>
+        IsPrefix(Committed(m.msource),log[m.mdest])
+
+\* Request vote messages give at most the last log
+\* index and term of the requester, as long as the requester
+\* is a Candidate
+RequestVoteRequestInv ==
+    \A m \in (DOMAIN messages) \cap RequestVoteRequestType :
+        (/\ state[m.msource] = Candidate
+         /\ currentTerm[m.msource] = m.mterm) =>
+        (/\ m.mlastLogIndex = Len(log[m.msource])
+         /\ m.mlastLogTerm = LastTerm(log[m.msource]))
+
+\* Append entries requests give the correct previous term
+\* and index of the source server
+AppendEntriesRequestInv ==
+    \A m \in (DOMAIN messages) \cap AppendEntriesRequestType :
+        (/\ m.mentries /= << >>
+         /\ m.mterm = currentTerm[m.msource]) =>
+        (/\ log[m.msource][m.mprevLogIndex + 1] = m.mentries[1]
+         /\ m.mprevLogIndex > 0 /\ m.mprevLogIndex <= Len(log[m.msource])=>
+            log[m.msource][m.mprevLogIndex].term = m.mprevLogTerm)
+
+\* The current term of any server is at least the term
+\* of any message sent by that server
+MessageTermsLtCurrentTerm ==
+    \A m \in (DOMAIN messages) :
+        m.mterm <= currentTerm[m.msource]
+
 ===============================================================================
 
 \* Changelog:
