@@ -961,6 +961,17 @@ ElectionSafety ==
             Max({n \in DOMAIN log[i] : log[i][n].term = currentTerm[i]}) >=
             Max({n \in DOMAIN log[j] : log[j][n].term = currentTerm[i]})
 ----
+\* Every (index, term) pair determines a log prefix
+LogMatching ==
+    \A i, j \in Server :
+        \A n \in (1..Len(log[i])) \cap (1..Len(log[j])) :
+            log[i][n].term = log[j][n].term =>
+            SubSeq(log[i],1,n) = SubSeq(log[j],1,n)
+----
+\* A leader has all committed entries in its log. This is expressed
+\* by LeaderCompleteness below. The inductive invariant for
+\* that property is the conjunction of LeaderCompleteness with the
+\* other three properties below.
 
 \* The prefix of the log of server i that has been committed
 Committed(i) == SubSeq(log[i],1,commitIndex[i])
@@ -985,14 +996,6 @@ QuorumLogInv ==
         \E j \in S :
             IsPrefix(Committed(i), log[j])
 
-\* The committed entries in every log are a prefix of the
-\* leader's log
-LeaderCompleteness ==
-    \A i \in Server :
-        state[i] = Leader =>
-        \A j \in Server :
-            IsPrefix(Committed(j),log[i])
-
 \* The "up-to-date" check performed by servers
 \* before issuing a vote implies that i receives
 \* a vote from j only if i has all of j's committed
@@ -1004,12 +1007,13 @@ MoreUpToDateCorrect ==
            /\ Len(log[i]) >= Len(log[j])) =>
        IsPrefix(Committed(j), log[i])
 
-\* Every (index, term) pair determines a log prefix
-LogMatching ==
-    \A i, j \in Server :
-        \A n \in (1..Len(log[i])) \cap (1..Len(log[j])) :
-            log[i][n].term = log[j][n].term =>
-            SubSeq(log[i],1,n) = SubSeq(log[j],1,n)
+\* The committed entries in every log are a prefix of the
+\* leader's log
+LeaderCompleteness ==
+    \A i \in Server :
+        state[i] = Leader =>
+        \A j \in Server :
+            IsPrefix(Committed(j),log[i])
 
 ----
 \* Invariants for messages
