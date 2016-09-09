@@ -891,6 +891,134 @@ LEMMA TypeInvariance == Spec => []TypeOK
 ----
 \* Correctness invariants
 
+\* The prefix of the log of server i that has been committed
+Committed(i) == SubSeq(log[i],1,commitIndex[i])
+
+----
+\* Invariants for messages
+
+\* If server i casts a vote for server j and their terms
+\* are the same, then i's committed log is a prefix of j's log
+RequestVoteResponseInv(m) ==
+    m \in RequestVoteResponseType =>
+        ((/\ m.mvoteGranted
+          /\ currentTerm[m.msource] = currentTerm[m.mdest]
+          /\ currentTerm[m.msource] = m.mterm) =>
+         (\/ LastTerm(log[m.mdest]) > LastTerm(log[m.msource])
+          \/ /\ LastTerm(log[m.mdest]) = LastTerm(log[m.msource])
+             /\ Len(log[m.dest]) >= Len(log[m.msource])))
+
+\* Request vote messages give at most the last log
+\* index and term of the requester, as long as the requester
+\* is a Candidate
+RequestVoteRequestInv(m) ==
+    m \in RequestVoteRequestType =>
+       ((/\ state[m.msource] = Candidate
+         /\ currentTerm[m.msource] = m.mterm) =>
+        (/\ m.mlastLogIndex = Len(log[m.msource])
+         /\ m.mlastLogTerm = LastTerm(log[m.msource])))
+
+\* Append entries requests give the correct previous term
+\* and index of the source server
+AppendEntriesRequestInv(m) ==
+    m \in AppendEntriesRequestType =>
+      ((/\ m.mentries /= << >>
+        /\ m.mterm = currentTerm[m.msource]) =>
+       (/\ log[m.msource][m.mprevLogIndex + 1] = m.mentries[1]
+        /\ m.mprevLogIndex > 0 /\ m.mprevLogIndex <= Len(log[m.msource])=>
+           log[m.msource][m.mprevLogIndex].term = m.mprevLogTerm))
+
+\* The current term of any server is at least the term
+\* of any message sent by that server
+MessageTermsLtCurrentTerm(m) ==
+    m.mterm <= currentTerm[m.msource]
+
+\* This invariant encodes everything in messages
+\* that is necessary for safety. I don't think that
+\* AppendEntriesResponses are relevant to safety,
+\* only progress.
+MessagesInv ==
+    \A m \in DOMAIN messages :
+        /\ RequestVoteResponseInv(m)
+        /\ RequestVoteRequestInv(m)
+        /\ AppendEntriesRequestInv(m)
+        /\ MessageTermsLtCurrentTerm(m)
+
+LEMMA MessagesCorrect == Spec => []MessagesInv
+<1> USE DEF MessagesInv
+<1>1. Init => MessagesInv
+    BY DEF Init, EmptyBag, SetToBag
+<1>2. MessagesInv /\ TypeOK /\ [Next]_vars => MessagesInv'
+  <2> SUFFICES ASSUME MessagesInv,
+                      TypeOK,
+                      [Next]_vars
+               PROVE  MessagesInv'
+    OBVIOUS
+  <2>1. CASE \E i \in Server : Restart(i)
+    <3> USE <2>1 DEF Restart
+    <3> SUFFICES ASSUME NEW m \in (DOMAIN messages)'
+                 PROVE  (/\ RequestVoteResponseInv(m)
+                         /\ RequestVoteRequestInv(m)
+                         /\ AppendEntriesRequestInv(m)
+                         /\ MessageTermsLtCurrentTerm(m))'
+      BY DEF MessagesInv
+    <3>1. RequestVoteResponseInv(m)'
+      BY DEF RequestVoteResponseInv
+    <3>2. RequestVoteRequestInv(m)'
+      BY DistinctRoles
+      DEF RequestVoteRequestInv, TypeOK, RequestVoteRequestType
+    <3>3. AppendEntriesRequestInv(m)'
+      BY DEF AppendEntriesRequestInv, TypeOK, AppendEntriesRequestType
+    <3>4. MessageTermsLtCurrentTerm(m)'
+      BY DEF MessageTermsLtCurrentTerm
+    <3>5. QED
+      BY <3>1, <3>2, <3>3, <3>4
+  <2>2. CASE \E i \in Server : Timeout(i)
+    <3> USE <2>2 DEF Timeout
+    <3> SUFFICES ASSUME NEW m \in (DOMAIN messages)'
+                 PROVE  (/\ RequestVoteResponseInv(m)
+                         /\ RequestVoteRequestInv(m)
+                         /\ AppendEntriesRequestInv(m)
+                         /\ MessageTermsLtCurrentTerm(m))'
+      BY DEF MessagesInv
+    <3>1. RequestVoteResponseInv(m)'
+      BY DEF RequestVoteResponseInv, logVars, TypeOK, RequestVoteResponseType
+    <3>2. RequestVoteRequestInv(m)'
+    <3>3. AppendEntriesRequestInv(m)'
+    <3>4. MessageTermsLtCurrentTerm(m)'
+    <3>5. QED
+      BY <3>1, <3>2, <3>3, <3>4
+  <2>3. ASSUME NEW i \in Server,
+               NEW j \in Server,
+               RequestVote(i, j)
+        PROVE  MessagesInv'
+    BY <2>3 DEF RequestVote
+  <2>4. CASE \E i \in Server : BecomeLeader(i)
+    BY <2>4 DEF BecomeLeader
+  <2>5. CASE \E i \in Server, v \in Value : ClientRequest(i, v)
+    BY <2>5 DEF ClientRequest
+  <2>6. CASE \E i \in Server : AdvanceCommitIndex(i)
+    BY <2>6 DEF AdvanceCommitIndex
+  <2>7. ASSUME NEW i \in Server,
+               NEW j \in Server,
+               AppendEntries(i, j)
+        PROVE  MessagesInv'
+    BY <2>7 DEF MessagesInv
+  <2>8. ASSUME NEW m \in DOMAIN messages,
+               Receive(m)
+        PROVE  MessagesInv'
+    BY <2>8 DEF MessagesInv
+  <2>9. CASE \E m \in DOMAIN messages : DuplicateMessage(m)
+    BY <2>9
+  <2>10. CASE \E m \in DOMAIN messages : DropMessage(m)
+    BY <2>10
+  <2>11. CASE UNCHANGED vars
+    BY <2>11 DEF vars
+  <2>12. QED
+    BY <2>1, <2>10, <2>11, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9 DEF Next
+<1>3. QED
+    BY <1>1, <1>2, PTL, TypeInvariance DEF Spec
+
 ----
 \* I believe that the election safety property in the Raft
 \* paper is stronger than it needs to be and requires history
@@ -904,7 +1032,8 @@ LEMMA TypeInvariance == Spec => []TypeOK
 LeaderVotesQuorum ==
     \A i \in Server :
         state[i] = Leader =>
-        {j \in Server : currentTerm[j] > currentTerm[i] \/ votedFor[j] = i} \in Quorum
+        {j \in Server : currentTerm[j] > currentTerm[i] \/
+                        (currentTerm[j] = currentTerm[i] /\ votedFor[j] = i)} \in Quorum
 
 \* If a candidate has a chance of being elected, there
 \* are no log entries with that candidate's term
@@ -928,30 +1057,67 @@ LEMMA ElectionsCorrect == Spec => [](CandidateTermNotInLog /\ LeaderVotesQuorum)
     BY DistinctRoles DEF LeaderVotesQuorum, InitServerVars
   <2>3. QED
     BY <2>1, <2>2
-<1>2. CandidateTermNotInLog /\ LeaderVotesQuorum /\ [Next]_vars => (CandidateTermNotInLog' /\ LeaderVotesQuorum')
-  <2> USE DistinctRoles
-  <2> USE DEF CandidateTermNotInLog, LeaderVotesQuorum
+<1>2. CandidateTermNotInLog /\ LeaderVotesQuorum /\ TypeOK /\ TypeOK' /\ [Next]_vars =>
+      (CandidateTermNotInLog' /\ LeaderVotesQuorum')
+  <2> USE DEF TypeOK
   <2> SUFFICES ASSUME CandidateTermNotInLog,
                       LeaderVotesQuorum,
+                      TypeOK,
+                      TypeOK',
                       [Next]_vars
                PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
     OBVIOUS
-  <2>1. CASE \E i \in Server : Restart(i)
-    BY <2>1 DEF Restart
-  <2>2. CASE \E i \in Server : Timeout(i)
-  <2>3. CASE \E i,j \in Server : RequestVote(i, j)
-  <2>4. CASE \E i \in Server : BecomeLeader(i)
-  <2>5. CASE \E i \in Server, v \in Value : ClientRequest(i, v)
-  <2>6. CASE \E i \in Server : AdvanceCommitIndex(i)
-  <2>7. CASE \E i,j \in Server : AppendEntries(i, j)
-  <2>8. CASE \E m \in DOMAIN messages : Receive(m)
-  <2>9. CASE \E m \in DOMAIN messages : DuplicateMessage(m)
-  <2>10. CASE \E m \in DOMAIN messages : DropMessage(m)
+  <2>1. ASSUME NEW i \in Server,
+               Restart(i)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+    BY <2>1, DistinctRoles
+    DEF Restart, CandidateTermNotInLog, LeaderVotesQuorum, Quorum
+  <2>2. ASSUME NEW i \in Server,
+               Timeout(i)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+    <3> USE <2>2 DEF Timeout
+    <3>1. CandidateTermNotInLog'
+    <3>2. LeaderVotesQuorum'
+        BY DistinctRoles DEF LeaderVotesQuorum, Quorum, logVars
+    <3>3. QED
+      BY <3>1, <3>2
+  <2>3. ASSUME NEW i \in Server,
+               NEW j \in Server,
+               RequestVote(i, j)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+    BY <2>3
+    DEF RequestVote, CandidateTermNotInLog, LeaderVotesQuorum, Quorum,
+        logVars, serverVars
+  <2>4. ASSUME NEW i \in Server,
+               BecomeLeader(i)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+    BY <2>4
+    DEF BecomeLeader, CandidateTermNotInLog, LeaderVotesQuorum, Quorum
+  <2>5. ASSUME NEW i \in Server,
+               NEW v \in Value,
+               ClientRequest(i, v)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+  <2>6. ASSUME NEW i \in Server,
+               AdvanceCommitIndex(i)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+  <2>7. ASSUME NEW i \in Server,
+               NEW j \in Server,
+               AppendEntries(i, j)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+  <2>8. ASSUME NEW m \in DOMAIN messages,
+               Receive(m)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+  <2>9. ASSUME NEW m \in DOMAIN messages,
+               DuplicateMessage(m)
+        PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
+  <2>10. ASSUME NEW m \in DOMAIN messages,
+                DropMessage(m)
+         PROVE  CandidateTermNotInLog' /\ LeaderVotesQuorum'
   <2>11. CASE UNCHANGED vars
   <2>12. QED
     BY <2>1, <2>10, <2>11, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9 DEF Next
 <1>3. QED
-    BY <1>1, <1>2, PTL DEF Spec
+    BY <1>1, <1>2, PTL, TypeInvariance DEF Spec
 
 \* A leader always has the greatest index for its current term
 ElectionSafety ==
@@ -972,9 +1138,6 @@ LogMatching ==
 \* by LeaderCompleteness below. The inductive invariant for
 \* that property is the conjunction of LeaderCompleteness with the
 \* other three properties below.
-
-\* The prefix of the log of server i that has been committed
-Committed(i) == SubSeq(log[i],1,commitIndex[i])
 
 \* Votes are only granted to servers with logs
 \* that are at least as up to date
@@ -1014,43 +1177,6 @@ LeaderCompleteness ==
         state[i] = Leader =>
         \A j \in Server :
             IsPrefix(Committed(j),log[i])
-
-----
-\* Invariants for messages
-
-\* If server i casts a vote for server j and their terms
-\* are the same, then i's committed log is a prefix of j's log
-RequestVoteResponseInv ==
-    \A m \in (DOMAIN messages) \cap RequestVoteResponseType :
-        (/\ m.mvoteGranted
-         /\ currentTerm[m.msource] = currentTerm[m.mdest]) =>
-        IsPrefix(Committed(m.msource),log[m.mdest])
-
-\* Request vote messages give at most the last log
-\* index and term of the requester, as long as the requester
-\* is a Candidate
-RequestVoteRequestInv ==
-    \A m \in (DOMAIN messages) \cap RequestVoteRequestType :
-        (/\ state[m.msource] = Candidate
-         /\ currentTerm[m.msource] = m.mterm) =>
-        (/\ m.mlastLogIndex = Len(log[m.msource])
-         /\ m.mlastLogTerm = LastTerm(log[m.msource]))
-
-\* Append entries requests give the correct previous term
-\* and index of the source server
-AppendEntriesRequestInv ==
-    \A m \in (DOMAIN messages) \cap AppendEntriesRequestType :
-        (/\ m.mentries /= << >>
-         /\ m.mterm = currentTerm[m.msource]) =>
-        (/\ log[m.msource][m.mprevLogIndex + 1] = m.mentries[1]
-         /\ m.mprevLogIndex > 0 /\ m.mprevLogIndex <= Len(log[m.msource])=>
-            log[m.msource][m.mprevLogIndex].term = m.mprevLogTerm)
-
-\* The current term of any server is at least the term
-\* of any message sent by that server
-MessageTermsLtCurrentTerm ==
-    \A m \in (DOMAIN messages) :
-        m.mterm <= currentTerm[m.msource]
 
 ===============================================================================
 
