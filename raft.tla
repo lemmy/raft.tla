@@ -502,6 +502,7 @@ ASSUME DistinctMessageTypes == /\ RequestVoteRequest /= AppendEntriesRequest
                                /\ AppendEntriesRequest /= AppendEntriesResponse
                                /\ RequestVoteResponse /= AppendEntriesResponse
 
+==== \* Remove four equals to enable TLAPS proof below.
 LEMMA WithMessage_IsABag ==
     \A B, m : IsABag(B) => IsABag(WithMessage(m,B))
   BY Bags_SetToBagIsABag, Bags_Union DEF WithMessage
