@@ -314,7 +314,7 @@ AppendEntriesAlreadyDone(i, j, index, m) ==
               msource         |-> i,
               mdest           |-> j],
               m)
-    /\ UNCHANGED <<serverVars, logVars>>
+    /\ UNCHANGED <<serverVars, logVars>> \* Bug https://github.com/ongardie/raft.tla/pull/6/files/182859802169f4ede94232f594f224388ac9f8b1#diff-bb3d38bb39f3fe7a00caad9b3342885e40e0d8bd96eb74897bf9ffe137a83355L372
 
 ConflictAppendEntriesRequest(i, index, m) ==
     /\ m.mentries /= << >>
