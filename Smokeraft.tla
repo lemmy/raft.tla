@@ -9,7 +9,7 @@ SmokeSeq(S) ==
     BoundedSeq(S, 1)
 
 SmokeNat ==
-    0..1
+    0..2
 
 SmokeInt ==
     -1..1
@@ -65,8 +65,8 @@ SmokeInit ==
     (* https://lamport.azurewebsites.net/tla/inductive-invariant.pdf *)
     /\ currentTerm \in RandomSubset(k, [Server -> SmokeNat])
     /\ state \in RandomSubset(k, [Server -> {Follower, Candidate, Leader}])
-    /\ votedFor \in RandomSubset(k, [Server -> Server \cup {Nil}])
-    /\ log \in RandomSubset(k, [Server -> BoundedSeq([term : SmokeNat, value : Value], 2)])
+    /\ votedFor \in {RandomElement([Server -> Server \cup {Nil}])}
+    /\ log \in {RandomElement([Server -> BoundedSeq([term : SmokeNat, value : Value], 3)])}
     /\ commitIndex \in RandomSubset(k, [Server -> SmokeNat])
     /\ votesResponded \in RandomSubset(k, [Server -> SUBSET Server])
     /\ votesGranted \in RandomSubset(k, [Server -> SUBSET Server])
